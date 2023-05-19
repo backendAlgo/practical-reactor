@@ -1,23 +1,26 @@
 import org.junit.jupiter.api.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.SignalType;
 import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 
 import java.time.Duration;
+import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.Flow;
 
 /**
  * In Reactor a Sink allows safe manual triggering of signals. We will learn more about multicasting and backpressure in
  * the next chapters.
- *
+ * <p>
  * Read first:
- *
+ * <p>
  * https://projectreactor.io/docs/core/release/reference/#sinks
  * https://projectreactor.io/docs/core/release/reference/#processor-overview
- *
+ * <p>
  * Useful documentation:
- *
+ * <p>
  * https://projectreactor.io/docs/core/release/reference/#which-operator
  * https://projectreactor.io/docs/core/release/api/reactor/core/publisher/Mono.html
  * https://projectreactor.io/docs/core/release/api/reactor/core/publisher/Flux.html
@@ -34,16 +37,17 @@ public class c8_Sinks extends SinksBase {
     @Test
     public void single_shooter() {
         //todo: feel free to change code as you need
-        Mono<Boolean> operationCompleted = null;
+        var sink = Sinks.<Boolean>one();
+        Mono<Boolean> operationCompleted = sink.asMono();
         submitOperation(() -> {
-
             doSomeWork(); //don't change this line
+            sink.emitValue(true, (signalType, emitResult) -> false);
         });
 
         //don't change code below
         StepVerifier.create(operationCompleted.timeout(Duration.ofMillis(5500)))
-                    .expectNext(true)
-                    .verifyComplete();
+                .expectNext(true)
+                .verifyComplete();
     }
 
     /**
@@ -54,18 +58,36 @@ public class c8_Sinks extends SinksBase {
      */
     @Test
     public void single_subscriber() {
-        //todo: feel free to change code as you need
-        Flux<Integer> measurements = null;
+        var sink = Sinks.many().unicast().<Integer>onBackpressureBuffer();
+        Flux<Integer> measurements = sink.asFlux();
         submitOperation(() -> {
-
             List<Integer> measures_readings = get_measures_readings(); //don't change this line
+            measures_readings.forEach(sink::tryEmitNext);
+            sink.tryEmitComplete();
         });
+
 
         //don't change code below
         StepVerifier.create(measurements
-                                    .delaySubscription(Duration.ofSeconds(6)))
-                    .expectNext(0x0800, 0x0B64, 0x0504)
-                    .verifyComplete();
+                        .delaySubscription(Duration.ofSeconds(6)))
+                .expectNext(0x0800, 0x0B64, 0x0504)
+                .verifyComplete();
+    }
+
+    @Test
+    public void multipleSubscribers() throws InterruptedException {
+        var sink = Sinks.many().multicast().<Integer>onBackpressureBuffer();
+        Flux<Integer> flux = sink.asFlux();
+        for (int i = 0; i < 10; i++) {
+            sink.tryEmitNext(i);
+        }
+        Thread.sleep(5000);
+        flux.subscribe(num -> System.out.println("first subs" + num));
+        flux.subscribe(num -> System.out.println("second subs" + num));
+        flux.subscribe(num -> System.out.println("third subs" + num));
+        sink.tryEmitNext(10);
+        sink.tryEmitComplete();
+        Thread.sleep(5000);
     }
 
     /**
@@ -75,18 +97,19 @@ public class c8_Sinks extends SinksBase {
     @Test
     public void it_gets_crowded() {
         //todo: feel free to change code as you need
-        Flux<Integer> measurements = null;
+        var sink = Sinks.many().multicast().<Integer>onBackpressureBuffer();
+        Flux<Integer> measurements = sink.asFlux();
         submitOperation(() -> {
-
             List<Integer> measures_readings = get_measures_readings(); //don't change this line
+            measures_readings.forEach(message -> sink.tryEmitNext(message));
         });
 
         //don't change code below
         StepVerifier.create(Flux.merge(measurements
-                                               .delaySubscription(Duration.ofSeconds(1)),
-                                       measurements.ignoreElements()))
-                    .expectNext(0x0800, 0x0B64, 0x0504)
-                    .verifyComplete();
+                                .delaySubscription(Duration.ofSeconds(1)),
+                        measurements.ignoreElements()))
+                .expectNext(0x0800, 0x0B64, 0x0504)
+                .verifyComplete();
     }
 
     /**
@@ -109,23 +132,23 @@ public class c8_Sinks extends SinksBase {
 
         //subscriber1 subscribes, takes one element and cancels
         StepVerifier sub1 = StepVerifier.create(Flux.merge(flux.take(1)))
-                                        .expectNext(0x0800)
-                                        .expectComplete()
-                                        .verifyLater();
+                .expectNext(0x0800)
+                .expectComplete()
+                .verifyLater();
 
         //subscriber2 subscribes, takes one element and cancels
         StepVerifier sub2 = StepVerifier.create(Flux.merge(flux.take(1)))
-                                        .expectNext(0x0800)
-                                        .expectComplete()
-                                        .verifyLater();
+                .expectNext(0x0800)
+                .expectComplete()
+                .verifyLater();
 
         //subscriber3 subscribes after all previous subscribers have cancelled
         StepVerifier sub3 = StepVerifier.create(flux.take(3)
-                                                    .delaySubscription(Duration.ofSeconds(6)))
-                                        .expectNext(0x0B64) //first measurement `0x0800` was already consumed by previous subscribers
-                                        .expectNext(0x0504)
-                                        .expectComplete()
-                                        .verifyLater();
+                        .delaySubscription(Duration.ofSeconds(6)))
+                .expectNext(0x0B64) //first measurement `0x0800` was already consumed by previous subscribers
+                .expectNext(0x0504)
+                .expectComplete()
+                .verifyLater();
 
         sub1.verify();
         sub2.verify();
@@ -151,24 +174,24 @@ public class c8_Sinks extends SinksBase {
 
         //subscriber1 subscribes, takes one element and cancels
         StepVerifier sub1 = StepVerifier.create(Flux.merge(flux.take(1)))
-                                        .expectNext(0x0800)
-                                        .expectComplete()
-                                        .verifyLater();
+                .expectNext(0x0800)
+                .expectComplete()
+                .verifyLater();
 
         //subscriber2 subscribes, takes one element and cancels
         StepVerifier sub2 = StepVerifier.create(Flux.merge(flux.take(1)))
-                                        .expectNext(0x0800)
-                                        .expectComplete()
-                                        .verifyLater();
+                .expectNext(0x0800)
+                .expectComplete()
+                .verifyLater();
 
         //subscriber3 subscribes after all previous subscribers have cancelled
         StepVerifier sub3 = StepVerifier.create(flux.take(3)
-                                                    .delaySubscription(Duration.ofSeconds(6)))
-                                        .expectNext(0x0800)
-                                        .expectNext(0x0B64)
-                                        .expectNext(0x0504)
-                                        .expectComplete()
-                                        .verifyLater();
+                        .delaySubscription(Duration.ofSeconds(6)))
+                .expectNext(0x0800)
+                .expectNext(0x0B64)
+                .expectNext(0x0504)
+                .expectComplete()
+                .verifyLater();
 
         sub1.verify();
         sub2.verify();
@@ -192,9 +215,9 @@ public class c8_Sinks extends SinksBase {
 
         //don't change code below
         StepVerifier.create(sink.asFlux()
-                                .doOnNext(System.out::println)
-                                .take(50))
-                    .expectNextCount(50)
-                    .verifyComplete();
+                        .doOnNext(System.out::println)
+                        .take(50))
+                .expectNextCount(50)
+                .verifyComplete();
     }
 }
